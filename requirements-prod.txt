@@ -1,0 +1,22 @@
+# Web 基础
+Flask>=3.0
+Flask-Cors>=4.0
+Flask-JWT-Extended>=4.6
+
+# ORM/数据库（仅当你真的用到数据库）
+SQLAlchemy>=2.0
+Flask-SQLAlchemy>=3.1
+alembic>=1.13
+Flask-Migrate>=4.0
+
+# 配置/网络
+python-dotenv>=1.0
+requests>=2.32
+
+# 生产 WSGI
+waitress>=2.1.2
+# 或者用 gunicorn>=21，二选一
+
+# 导出/导入（你有相关路由/工具才需要）
+pandas>=2.2,<3
+openpyxl>=3.1
