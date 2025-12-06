@@ -218,46 +218,48 @@ def role_required(*required_roles):
 
 @auth_bp.post("/register")
 def register():
-    """
-    简单注册：{username, password} -> 创建用户并直接返回 token 结构
-    """
+
     data = request.get_json(silent=True) or {}
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
+    phone = (data.get("phone") or "").strip()  # 🔥 新增：获取手机号
+
     if not username or not password:
         return jsonify({"success": False, "msg": "用户名或密码不能为空"}), 200
 
     if User.query.filter_by(username=username).first():
         return jsonify({"success": False, "msg": "用户名已存在"}), 200
+    
+    # 如果填了手机号，检查是否重复
+    if phone and User.query.filter_by(phone=phone).first():
+        return jsonify({"success": False, "msg": "该手机号已被注册"}), 200
 
-    user = User(username=username)
-    # 你的 User 需实现 set_password（或在此改用自定义加密存储）
-    if hasattr(user, "set_password") and callable(user.set_password):
+    # 🔥 存入 phone
+    user = User(username=username, phone=phone if phone else None)
+    
+    if hasattr(user, "set_password"):
         user.set_password(password)
-    else:
-        # 若没有 set_password，这里可自行实现 hash 存储
-        return jsonify({"success": False, "msg": "后端缺少 set_password 实现"}), 500
-
+    
     db.session.add(user)
     db.session.commit()
 
     roles = ["user"]
-    identity = str(user.id)  # 统一字符串
+    identity = str(user.id)
     access_token = create_access_token(identity=identity, additional_claims={"roles": roles})
     refresh_token = create_refresh_token(identity=identity, additional_claims={"roles": roles})
     expires = _fmt_expires(_now_utc() + timedelta(hours=ACCESS_EXPIRES_HOURS))
 
     return jsonify({
         "success": True,
-        "accessToken": access_token,   # 顶层
-        "refreshToken": refresh_token, # 顶层
+        "accessToken": access_token,
+        "refreshToken": refresh_token,
         "expires": expires,
         "data": {
             "accessToken": access_token,
             "refreshToken": refresh_token,
             "expires": expires,
             "username": user.username,
-            "roles": roles,
-            "permissions": ["*:*:*"],
+            "phone": user.phone, # 可以把手机号也返回给前端
+            "roles": roles
         }
     }), 200

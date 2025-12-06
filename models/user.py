@@ -3,11 +3,17 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
 
 class User(db.Model):
-    __tablename__ = 'user'  # 通用用户表名
+    __tablename__ = 'user'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), unique=True, nullable=False)
+    
+    # 🔥 新增字段
+    phone = db.Column(db.String(20), unique=True, nullable=True)
+    email = db.Column(db.String(120), unique=True, nullable=True)  # 新增邮箱
+    avatar = db.Column(db.String(255), nullable=True)             # 新增头像URL
+    
     password_hash = db.Column(db.String(128), nullable=False)
-    role = db.Column(db.String(32), default='user')  # 支持 user、admin、superadmin
+    role = db.Column(db.String(32), default='user')
     status = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -22,6 +28,9 @@ class User(db.Model):
         return {
             'id': self.id,
             'username': self.username,
+            'phone': self.phone,
+            'email': self.email,
+            'avatar': self.avatar,
             'role': self.role,
             'status': self.status,
             'created_at': self.created_at.isoformat(),
