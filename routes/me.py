@@ -5,7 +5,7 @@ from flask_jwt_extended import jwt_required, get_jwt_identity
 from sqlalchemy import desc
 from extensions import db
 
-# 动态导入模型，防止循环引用
+# 动态导入模型
 try:
     from models.user import User
 except ImportError:
@@ -30,7 +30,7 @@ def _current_user_id() -> int | None:
     try: return int(ident)
     except: return None
 
-# 1. 我是谁
+# ========== 1) 基础用户信息 ==========
 @bp_me.get("/me")
 @jwt_required()
 def me():
@@ -49,19 +49,17 @@ def me():
             })
     return jsonify({"id": uid, "msg": "User not found"})
 
-# 2. 获取个人资料 (🔥 修复：扁平化返回 + 查数据库)
+# ========== 2) 个人资料 (GET/PUT) - 已修复保存逻辑 ==========
 @bp_me.get("/me/profile")
 @jwt_required()
 def get_profile():
     uid = _current_user_id()
     if not uid: return jsonify({"error": "UNAUTHORIZED"}), 401
 
-    # 1. 获取 User (为了拿 phone, email, avatar)
     user = db.session.get(User, uid) if User else None
     if not user:
         return jsonify({"msg": "User not found"}), 404
 
-    # 2. 获取 Profile (为了拿 gpa, major 等)
     prof = None
     if StudentProfile:
         prof = db.session.query(StudentProfile).filter_by(user_id=uid).first()
@@ -70,16 +68,14 @@ def get_profile():
             db.session.add(prof)
             db.session.commit()
 
-    # 🔥 关键：把 User 表的数据和 Profile 表的数据合并返回
+    # 🔥 扁平化返回
     data = {
-        # --- User 表字段 ---
         "id": user.id,
         "username": user.username,
         "phone": getattr(user, "phone", "") or "",   
         "email": getattr(user, "email", "") or "",   
         "avatar": getattr(user, "avatar", "") or "", 
         
-        # --- Profile 表字段 ---
         "gpa": getattr(prof, "gpa", None) if prof else None,
         "gpa_scale": getattr(prof, "gpa_scale", "4.0") if prof else "4.0",
         "ielts": getattr(prof, "ielts", None) if prof else None,
@@ -93,15 +89,10 @@ def get_profile():
         "target_country": getattr(prof, "target_country", None) if prof else None,
         "budget": getattr(prof, "budget", None) if prof else None,
         
-        # 兼容旧字段
         "country_pref": getattr(prof, "country_pref", None) if prof else None,
-        "target_uni": getattr(prof, "target_uni", None) if prof else None,
-        "target_program": getattr(prof, "target_program", None) if prof else None,
-        "undergrad_tier": getattr(prof, "undergrad_tier", None) if prof else None,
     }
     return jsonify(data)
 
-# 3. 更新个人资料 (🔥 修复：同时更新 User 和 Profile)
 @bp_me.put("/me/profile")
 @jwt_required()
 def put_profile():
@@ -110,7 +101,7 @@ def put_profile():
 
     data = request.get_json(silent=True) or {}
     
-    # 🔥 关键修复：显式更新 User 表！
+    # 🔥 显式更新 User 表 (手机/邮箱/头像)
     if User:
         user = db.session.get(User, uid)
         if user:
@@ -125,12 +116,11 @@ def put_profile():
             prof = StudentProfile(user_id=uid)
             db.session.add(prof)
 
-        # 这里放档案相关的字段
         allowed_fields = [
             "gpa", "gpa_scale", "ielts", "toefl", "gre", 
             "english_test", "english_score", "major", 
             "grad_year", "work_years", "target_country", "budget",
-            "country_pref", "target_uni", "target_program", "undergrad_tier"
+            "country_pref"
         ]
         
         for k in allowed_fields:
@@ -144,7 +134,44 @@ def put_profile():
         db.session.rollback()
         return jsonify({"msg": f"保存失败: {str(e)}"}), 500
 
-# 4. 最近评测 (保持不变)
+# ========== 3) 评估结果 (合并自 profile.py) ==========
+
+# 列表接口 (从 profile.py 迁移过来)
+@bp_me.get("/me/assessment-results")
+@jwt_required()
+def list_assessment_results():
+    uid = _current_user_id()
+    if not uid: return jsonify({"msg": "Unauthorized"}), 401
+    
+    if not AssessmentResult: return jsonify({"items": []})
+
+    limit = int(request.args.get("limit", 20))
+    q = AssessmentResult.query.filter_by(user_id=uid).order_by(AssessmentResult.created_at.desc())
+    items = q.limit(limit).all()
+
+    def to_dict(x):
+        return {
+            "id": x.id,
+            "created_at": x.created_at.isoformat() if x.created_at else None,
+            "top": {
+                "program_id": x.top_program_id,
+                "title": x.top_program_title,
+                "university": x.top_university,
+                "country": x.top_country,
+                "city": x.top_city,
+            },
+            "prob": x.prob,
+            "low": x.prob_low,
+            "high": x.prob_high,
+            "risks": x.risks or [],
+            "improvements": x.improvements or [],
+            "results": x.results,
+            "input": x.input_payload,
+        }
+
+    return jsonify({"items": [to_dict(i) for i in items]})
+
+# 最新结果接口 (保留原 me.py 逻辑，兼容 /me/assessments/latest)
 @bp_me.get("/me/assessments/latest")
 @jwt_required()
 def latest_assessment():
@@ -165,6 +192,7 @@ def latest_assessment():
     top_item = results[0] if results else {}
     prob = top_item.get("prob")
     if prob is None and "percent" in top_item: prob = top_item["percent"] / 100.0
+    
     p_obj = top_item.get("program") or {}
     top = {
         "title": p_obj.get("title") or top_item.get("title"),
@@ -174,3 +202,10 @@ def latest_assessment():
     return jsonify({
         "prob": prob, "results": results, "top": top, "input": payload
     })
+
+# 兼容旧路由：为了保险起见，增加一个 alias 指向同一个函数
+# 如果前端有的地方用了 /api/me/assessment-results/latest
+@bp_me.get("/me/assessment-results/latest")
+@jwt_required()
+def latest_assessment_alias():
+    return latest_assessment()

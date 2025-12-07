@@ -1,26 +1,43 @@
+# backend/models/order.py
 from datetime import datetime
 from extensions import db
 
 class Order(db.Model):
     """
-    用户订单记录：
-    - 支持多渠道：wechat / alipay / manual / stripe 等
-    - 为了简化前期开发，amount 使用 Numeric(10,2)，保持与 Product.price 一致
+    用户订单记录 (融合版)：
+    - 兼容原有字段：total_amount, items, description
+    - 新增支付字段：out_trade_no, trade_no, product_name, amount, pay_time
     """
     __tablename__ = "orders"
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
 
-    status = db.Column(db.String(20), default="pending", index=True)  # pending | paid | cancelled | refunded
+    # === 原有字段 (保持不变) ===
+    status = db.Column(db.String(20), default="pending", index=True)  # pending | paid | cancelled | refunded (注意：pay.py使用 'PENDING'/'PAID'，建议统一)
     channel = db.Column(db.String(20))                                # wechat / alipay / manual / stripe ...
     currency = db.Column(db.String(8), default="CNY")
-    total_amount = db.Column(db.Numeric(10, 2), nullable=True)        # 总金额
-    description = db.Column(db.String(255))                           # 简短描述（产品摘要）
+    total_amount = db.Column(db.Numeric(10, 2), nullable=True)        # 原有金额字段
+    description = db.Column(db.String(255))                           # 原有描述字段
+    paid_at = db.Column(db.DateTime)                                  # 原有支付时间
+
+    # === 🔥 新增字段 (为了兼容 pay.py 的逻辑) ===
+    # 支付平台必须的唯一商户订单号
+    out_trade_no = db.Column(db.String(64), unique=True, nullable=True, index=True) 
+    # 支付宝/微信返回的流水号
+    trade_no = db.Column(db.String(64), nullable=True)
+    # 商品名称 (pay.py 使用 product_name 而不是 description)
+    product_name = db.Column(db.String(128), nullable=True)
+    # 支付金额 (pay.py 使用 amount (Float) 而不是 total_amount (Numeric))
+    # 建议：后续代码统一逻辑，暂时并存以防报错
+    amount = db.Column(db.Float, nullable=True)
+    # 支付时间 (pay.py 使用 pay_time 而不是 paid_at)
+    pay_time = db.Column(db.DateTime, nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    paid_at = db.Column(db.DateTime)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # 关联关系 (保持不变)
     items = db.relationship("OrderItem", backref="order", lazy="joined")
 
     def to_dict(self):
@@ -29,19 +46,24 @@ class Order(db.Model):
             "status": self.status,
             "channel": self.channel,
             "currency": self.currency,
-            "total_amount": str(self.total_amount) if self.total_amount is not None else None,
+            # 优先返回 pay.py 用的字段，如果没有则返回旧字段
+            "out_trade_no": self.out_trade_no,
+            "trade_no": self.trade_no,
+            "product_name": self.product_name or self.description,
+            "amount": self.amount if self.amount is not None else (str(self.total_amount) if self.total_amount else 0),
+            
             "description": self.description,
             "created_at": self.created_at.isoformat() if self.created_at else None,
-            "paid_at": self.paid_at.isoformat() if self.paid_at else None,
+            "paid_at": self.paid_at.isoformat() if self.paid_at else (self.pay_time.isoformat() if self.pay_time else None),
+            
+            # 保持原有的 items 输出
             "items": [i.to_dict() for i in self.items],
         }
 
 
 class OrderItem(db.Model):
     """
-    订单明细：
-    - 一条订单可以对应多个 Product（目前前端可以只用 1 个）
-    - unit_price/amount 使用 Numeric(10,2)
+    订单明细 (保持不变)
     """
     __tablename__ = "order_items"
 
@@ -49,7 +71,6 @@ class OrderItem(db.Model):
     order_id = db.Column(db.Integer, db.ForeignKey("orders.id"), nullable=False, index=True)
     product_id = db.Column(db.Integer, db.ForeignKey("products.id"), nullable=False, index=True)
 
-    # 冗余快照字段，避免产品后续改名/改价影响历史订单显示
     product_title = db.Column(db.String(200), nullable=False)
     product_slug = db.Column(db.String(120), nullable=False)
 
@@ -73,10 +94,7 @@ class OrderItem(db.Model):
 
 class ServiceEntitlement(db.Model):
     """
-    用户已开通的服务权益：
-    - full 套餐：kind = 'plan', code = 'full'
-    - 单项产品：kind = 'product', product_id 不为空
-    - 未来可以扩展次数、有效期等
+    用户权益 (保持不变)
     """
     __tablename__ = "service_entitlements"
 
@@ -84,16 +102,16 @@ class ServiceEntitlement(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False, index=True)
 
     kind = db.Column(db.String(20), nullable=False)   # plan | product
-    code = db.Column(db.String(64), nullable=True)    # 例如 full / diy / slug 等
+    code = db.Column(db.String(64), nullable=True)
     product_id = db.Column(db.Integer, db.ForeignKey("products.id"), nullable=True)
 
     source_order_id = db.Column(db.Integer, db.ForeignKey("orders.id"), nullable=True)
 
-    remaining_uses = db.Column(db.Integer, nullable=True)  # None 表示不限次数
+    remaining_uses = db.Column(db.Integer, nullable=True)
     valid_from = db.Column(db.DateTime, nullable=True)
     valid_to = db.Column(db.DateTime, nullable=True)
 
-    status = db.Column(db.String(20), default="active")  # active | expired | revoked
+    status = db.Column(db.String(20), default="active")
 
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

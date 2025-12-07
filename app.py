@@ -13,7 +13,7 @@ from routes.auth import auth_bp
 from routes.program_admin import admin_program_bp
 from routes.program_public import public_program_bp
 from routes.upload import upload_bp
-from routes.profile import profile_bp
+#from routes.profile import profile_bp#
 from routes.predict import predict_bp
 from routes.dashboard import dashboard_bp
 from routes.application import application_bp
@@ -77,7 +77,7 @@ def create_app():
     app.register_blueprint(admin_program_bp)
     app.register_blueprint(public_program_bp)
     app.register_blueprint(upload_bp)
-    app.register_blueprint(profile_bp)
+    #pp.register_blueprint(profile_bp)#
     app.register_blueprint(predict_bp)
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(application_bp)
